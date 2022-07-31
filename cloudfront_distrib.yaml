@@ -1,0 +1,155 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS S3 Bucket with CloudFront distribution
+Parameters:
+  RootDomainName:
+    Description: Domain name for your website (example.com)
+    Type: String
+    Default: moonstar.click
+  AwsRoute53CloudFrontHostedZoneId:
+    Description:  CloudFront resources HostedZoneId
+    Type:         String
+    Default:      Z0772376FVYXIANRZPOE
+
+Resources:
+
+#### S3Buckets for website hosting
+  WebBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      AccessControl: PublicRead
+      BucketName: bucket-moonstarclick
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: 404.html
+  BlogWebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: PublicRead
+      BucketName: !Sub "${WebBucket}-blog"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: 404.html
+
+  RootBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginIdentity}'
+            Action: 's3:GetObject'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref WebBucket
+                - /*
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'true'
+                
+  ResourcesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BlogWebBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: 's3:GetObject'
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginIdentity}'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref BlogWebBucket
+                - /*
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'true'
+
+
+
+#### ACM Certificate
+  ACMCertificate: 
+    Type: AWS::CertificateManager::Certificate
+    Properties: 
+      DomainName: !Sub "*.${RootDomainName}"
+      SubjectAlternativeNames:
+        - !Ref RootDomainName
+        - !Sub "*.${RootDomainName}"
+      CertificateTransparencyLoggingPreference: DISABLED
+      DomainValidationOptions:
+        - DomainName: !Ref RootDomainName
+          HostedZoneId: !Ref AwsRoute53CloudFrontHostedZoneId
+      ValidationMethod: DNS
+
+#### CloudFront
+  ## Origin Access Identity
+  CloudFrontOriginIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties: 
+      CloudFrontOriginAccessIdentityConfig: 
+        Comment: !Sub "The OAI for the bucket: ${WebBucket}"
+
+  ## Cloudfront distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn: ACMCertificate
+    Properties:
+      DistributionConfig:
+        Origins:
+          - Id: 's3-web-bucket'
+            DomainName: !Sub "${WebBucket}.s3.amazonaws.com"
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginIdentity}"
+          - Id: 'custom-origin'
+            DomainName: !Sub "${BlogWebBucket}.s3.amazonaws.com"
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginIdentity}"
+        Enabled: 'true'
+        Comment: Static main website distribution
+        HttpVersion: http2
+        DefaultRootObject: index.html
+        DefaultCacheBehavior:
+          DefaultTTL: 1800
+          MaxTTL: 14400
+          Compress: true
+          AllowedMethods:
+            - HEAD
+            - GET
+            - OPTIONS
+          CachedMethods:
+            - HEAD
+            - GET
+            - OPTIONS
+          TargetOriginId: s3-web-bucket
+          ForwardedValues:
+            QueryString: 'false'
+          ViewerProtocolPolicy: redirect-to-https
+        CacheBehaviors:
+          - PathPattern: "/two/*"
+            TargetOriginId: 'custom-origin'
+            ForwardedValues:
+              QueryString: false
+            ViewerProtocolPolicy: redirect-to-https
+        PriceClass: PriceClass_100
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        Aliases:
+          - !Sub "sub.${RootDomainName}"
+        ViewerCertificate:
+          AcmCertificateArn: !Ref ACMCertificate
+          SslSupportMethod: sni-only
+
+
+#### Outputs   
+Outputs:
+  WebsiteURL:
+    Value: !GetAtt WebBucket.WebsiteURL
+    Description: URL for website hosted on S3

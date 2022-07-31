@@ -1,0 +1,367 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS EC2 NGINX webserver with Route53 configuration
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - VPC
+          - RemoteAccessCIDR
+      - Label:
+          default: Linux Instance Configuration
+        Parameters:
+          - KeyPair
+          - LinuxInstanceType
+          - LatestAmiId
+    ParameterLabels:
+      VPC:
+        default: VPC
+      KeyPair:
+        default: Key Pair
+      RemoteAccessCIDR:
+        default: Remote Access CIDR Block
+      LinuxInstanceType:
+        default: Linux Instance Type
+      LatestAmiId:
+        default: SSM key to the latest Amazon linux AMI
+Parameters:
+  VPC:
+    Type: 'AWS::EC2::VPC::Id'
+    Description: Select the VPC where the EC2 instances will be created
+    ConstraintDescription: must be an existing VPC
+  KeyPair:
+    Description: Name of existing EC2 key pair for Linux Instances
+    Type: 'AWS::EC2::KeyPair::KeyName'
+  RemoteAccessCIDR:
+    Description: CIDR block to allow access to linux instances
+    Type: String
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+    Default: 0.0.0.0/0
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t2.micro
+      - t2.medium
+      - t3.micro
+      - t3.medium
+      - t3.large
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+Resources:
+
+#### S3Bucket
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      AccessControl: PublicRead
+      BucketName: test-bucket-ksu-dp
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+  BucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      PolicyDocument:
+        Id: MyPolicy
+        Version: 2012-10-17
+        Statement:
+          - Sid: PublicReadForGetBucketObjects
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref S3Bucket
+                - /*
+      Bucket: !Ref S3Bucket
+
+#### EC2 instance
+  WebSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId:
+        Ref: VPC
+      GroupDescription: Enable HTTP and HTTPS access
+      SecurityGroupIngress:
+        - Description: allow incoming HTTP
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - Description: allow incoming HTTPS
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - Description: allow icmp
+          IpProtocol: icmp
+          FromPort: '-1'
+          ToPort: '-1'
+          CidrIp:
+            Ref: RemoteAccessCIDR
+        - Description: allow SSH
+          IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp:
+            Ref: RemoteAccessCIDR
+      SecurityGroupEgress:
+        - Description: allow outgoing HTTP
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - Description: allow outgoing HTTPS
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+  WebServerInstance:
+    Type: 'AWS::EC2::Instance'
+    Metadata:
+      'AWS::CloudFormation::Init':
+        configSets:
+          All:
+            - extras
+            - confignginx
+        extras:
+          commands:
+            enable_nginx:
+              command: amazon-linux-extras enable nginx1.12
+        confignginx:
+          packages:
+            yum:
+              nginx: []
+          services:
+            sysvinit:
+              nginx:
+                enabled: 'true'
+                ensureRunning: 'true'
+    Properties:
+      InstanceType:
+        Ref: InstanceType
+      ImageId:
+        Ref: LatestAmiId
+      KeyName:
+        Ref: KeyPair
+      IamInstanceProfile:
+        Ref: PatchingInstanceProfile
+      Tags:
+        - Key: Name
+          Value:
+            'Fn::Sub': 'EC2-NGINX-${AWS::StackName}'
+      SecurityGroupIds:
+        - 'Fn::GetAtt':
+            - WebSecurityGroup
+            - GroupId
+      UserData:
+        'Fn::Base64':
+          'Fn::Join':
+            - ''
+            - - |
+                #!/bin/bash -xe
+              - |
+                yum update -y aws-cfn-bootstrap
+              - |
+                # Install the files and packages from the metadata
+              - '/opt/aws/bin/cfn-init -v '
+              - '         --stack '
+              - Ref: 'AWS::StackName'
+              - '         --resource WebServerInstance '
+              - '         --configsets All '
+              - '         --region '
+              - Ref: 'AWS::Region'
+              - |+
+
+              - |
+                # Signal the status from cfn-init
+              - '/opt/aws/bin/cfn-signal -e $? '
+              - '         --stack '
+              - Ref: 'AWS::StackName'
+              - '         --resource WebServerInstance '
+              - '         --region '
+              - Ref: 'AWS::Region'
+              - |+
+
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT5M
+  InstancePatchingRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM'
+        - 'arn:aws:iam::aws:policy/AmazonSSMFullAccess'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+  PatchingInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - Ref: InstancePatchingRole
+
+#### Route53
+  myDNSRecordHostedZone: 
+    Type: "AWS::Route53::HostedZone"
+    Properties: 
+      HostedZoneConfig: 
+        Comment: 'Hosted zone for sub.moonstar.click'
+      Name: 'sub.moonstar.click'
+
+  Route53RecordSetCname:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref 'myDNSRecordHostedZone'
+      Comment: "Record to redirect traffic to main domain."
+      Name: 'www.sub.moonstar.click'
+      Type: CNAME
+      TTL: 300
+      ResourceRecords:
+      - 'sub.moonstar.click'
+    DependsOn: myDNSRecordHostedZone
+
+  Route53RecordSetTxt:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref 'myDNSRecordHostedZone'
+      Comment: "Valid TXT record"
+      Name: 'ec2.sub.moonstar.click'
+      Type: TXT
+      TTL: 300
+      ResourceRecords:
+      - "\"Sample text entry\""
+    DependsOn: myDNSRecordHostedZone
+ 
+  Route53RecordSetS3:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      Comment: "Alias for static content hosted on s3"
+      HostedZoneId: !Ref 'myDNSRecordHostedZone'
+      Name: "s3.sub.moonstar.click"
+      Type: A
+      AliasTarget:
+        HostedZoneId: 'Z3AQBSTGFYJSTF'
+        #Bucket website endpoint without http://
+        DNSName: !Join 
+          - ""
+          - - !Ref S3Bucket
+            - ".s3-website-"
+            - !Ref AWS::Region
+            - ".amazonaws.com"       
+    DependsOn: [myDNSRecordHostedZone, S3Bucket]
+
+  Route53RecordSetEc2:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref 'myDNSRecordHostedZone'
+      Comment: "DNS name for EC2-NGINX instance."
+      Name: 'ec2.sub.moonstar.click'
+      Type: A
+      TTL: 300
+      ResourceRecords:
+        - !GetAtt 
+          - WebServerInstance
+          - PublicIp
+    DependsOn: [myDNSRecordHostedZone, WebServerInstance]
+
+  HealthcheckEc2Http:
+    Type: "AWS::Route53::HealthCheck"
+    Properties:
+      HealthCheckConfig:
+        Type: HTTP
+        ResourcePath: "/"
+        IPAddress: !GetAtt [ WebServerInstance, PublicIp ]
+        RequestInterval: "30"
+        FailureThreshold: "2"
+      HealthCheckTags: 
+        - 
+          Key: "Name"
+          Value: "HealthcheckEc2Http"
+    DependsOn: [myDNSRecordHostedZone, WebServerInstance, Route53RecordSetEc2]
+
+  HealthcheckEc2Https:
+    Type: "AWS::Route53::HealthCheck"
+    Properties:
+      HealthCheckConfig:
+        Type: HTTPS
+        ResourcePath: "/"
+        IPAddress: !GetAtt [ WebServerInstance, PublicIp ]
+        RequestInterval: "30"
+        FailureThreshold: "2"
+      HealthCheckTags: 
+        - 
+          Key: "Name"
+          Value: "HealthcheckEc2Https"
+    DependsOn: [myDNSRecordHostedZone, WebServerInstance, Route53RecordSetEc2]
+
+  RecordSetPrimary:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      Failover: PRIMARY
+      AliasTarget:
+        DNSName: 'ec2.sub.moonstar.click'
+        EvaluateTargetHealth: true
+        HostedZoneId: !Ref myDNSRecordHostedZone
+      HostedZoneId: !Ref myDNSRecordHostedZone
+      Name: 'site.sub.moonstar.click'
+      SetIdentifier: Primary
+      Type: A
+      HealthCheckId: !Ref HealthcheckEc2Https
+
+  RecordSetSecondary:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      Failover: SECONDARY
+      AliasTarget:
+        DNSName: 's3.sub.moonstar.click'
+        EvaluateTargetHealth: true
+        HostedZoneId: !Ref myDNSRecordHostedZone
+      HostedZoneId: !Ref myDNSRecordHostedZone
+      Name: 'site.sub.moonstar.click'
+      SetIdentifier: Secondary
+      Type: A
+
+#### Outputs   
+Outputs:
+  WebsiteURLEc2:
+    Description: DNS root URL of the new webserver
+    Value:
+      'Fn::Join':
+        - ''
+        - - 'http://'
+          - 'Fn::GetAtt':
+              - WebServerInstance
+              - PublicDnsName
+  WebsiteIP:
+    Description: IP root URL of the new webserver
+    Value:
+      'Fn::Join':
+        - ''
+        - - 'http://'
+          - 'Fn::GetAtt':
+              - WebServerInstance
+              - PublicIp
+  WebsiteURLS3:
+    Value: !GetAtt 
+      - S3Bucket
+      - WebsiteURL
+    Description: URL for website hosted on S3
+
+  HostedZoneID: 
+    Value: !Ref 'myDNSRecordHostedZone'
