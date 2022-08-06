@@ -13,87 +13,74 @@ Parameters:
 
 Resources:
 
-#### S3Buckets for website hosting
-  WebBucket:
-    Type: 'AWS::S3::Bucket'
-    Properties:
-      AccessControl: PublicRead
-      BucketName: bucket-moonstarclick
-      WebsiteConfiguration:
-        IndexDocument: index.html
-        ErrorDocument: 404.html
-  BlogWebBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      AccessControl: PublicRead
-      BucketName: !Sub "${WebBucket}-blog"
-      WebsiteConfiguration:
-        IndexDocument: index.html
-        ErrorDocument: 404.html
-
-  RootBucketPolicy:
-    Type: 'AWS::S3::BucketPolicy'
-    Properties:
-      Bucket: !Ref WebBucket
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
-            Effect: Allow
-            Principal:
-              AWS: !Sub 'arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginIdentity}'
-            Action: 's3:GetObject'
-            Resource: !Join 
-              - ''
-              - - 'arn:aws:s3:::'
-                - !Ref WebBucket
-                - /*
-            Condition:
-              Bool:
-                'aws:SecureTransport': 'true'
-                
-  ResourcesBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref BlogWebBucket
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Action: 's3:GetObject'
-            Effect: Allow
-            Principal:
-              AWS: !Sub 'arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginIdentity}'
-            Resource: !Join 
-              - ''
-              - - 'arn:aws:s3:::'
-                - !Ref BlogWebBucket
-                - /*
-            Condition:
-              Bool:
-                'aws:SecureTransport': 'true'
-
-
-
 #### ACM Certificate
   ACMCertificate: 
     Type: AWS::CertificateManager::Certificate
     Properties: 
-      DomainName: !Sub "*.${RootDomainName}"
+      DomainName: !Sub "${RootDomainName}"
       SubjectAlternativeNames:
         - !Ref RootDomainName
-        - !Sub "*.${RootDomainName}"
+        - !Sub "www.${RootDomainName}"
       CertificateTransparencyLoggingPreference: DISABLED
       DomainValidationOptions:
         - DomainName: !Ref RootDomainName
           HostedZoneId: !Ref AwsRoute53CloudFrontHostedZoneId
       ValidationMethod: DNS
 
-#### CloudFront
-  ## Origin Access Identity
-  CloudFrontOriginIdentity:
+### Origin Access Identity
+  OriginAccessIdentity:
     Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
     Properties: 
       CloudFrontOriginAccessIdentityConfig: 
-        Comment: !Sub "The OAI for the bucket: ${WebBucket}"
+        Comment: !Sub "The OAI for the bucket: ${WebsiteBucket}"
+
+#### S3Buckets for website hosting
+  WebsiteBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: bucket-moonstarclick
+      AccessControl: 'Private'
+      WebsiteConfiguration:
+        IndexDocument: index.html
+
+  BlogWebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${WebsiteBucket}-blog"
+      AccessControl: 'Private'
+      WebsiteConfiguration:
+        IndexDocument: index.html
+
+  WebsiteBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    DependsOn: WebsiteBucket
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+            Effect: Allow
+            Principal:
+              CanonicalUser:
+                Fn::GetAtt: [ OriginAccessIdentity , S3CanonicalUserId ]
+            Action: "s3:GetObject"
+            Resource: !Sub "${WebsiteBucket.Arn}/*"
+                
+  BlogWebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn: BlogWebsiteBucket
+    Properties:
+      Bucket: !Ref BlogWebsiteBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: 's3:GetObject'
+            Effect: Allow
+            Principal:
+              CanonicalUser:
+                Fn::GetAtt: [ OriginAccessIdentity , S3CanonicalUserId ]
+            Action: "s3:GetObject"
+            Resource: !Sub "${BlogWebsiteBucket.Arn}/*"
 
   ## Cloudfront distribution
   CloudFrontDistribution:
@@ -103,20 +90,18 @@ Resources:
       DistributionConfig:
         Origins:
           - Id: 's3-web-bucket'
-            DomainName: !Sub "${WebBucket}.s3.amazonaws.com"
+            DomainName: !Sub "${WebsiteBucket}.s3.amazonaws.com"
             S3OriginConfig:
-              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginIdentity}"
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${OriginAccessIdentity}"
           - Id: 'custom-origin'
-            DomainName: !Sub "${BlogWebBucket}.s3.amazonaws.com"
+            DomainName: !Sub "${BlogWebsiteBucket}.s3.amazonaws.com"
             S3OriginConfig:
-              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginIdentity}"
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${OriginAccessIdentity}"
         Enabled: 'true'
         Comment: Static main website distribution
         HttpVersion: http2
         DefaultRootObject: index.html
         DefaultCacheBehavior:
-          DefaultTTL: 1800
-          MaxTTL: 14400
           Compress: true
           AllowedMethods:
             - HEAD
@@ -129,6 +114,8 @@ Resources:
           TargetOriginId: s3-web-bucket
           ForwardedValues:
             QueryString: 'false'
+            Cookies:
+              Forward: "none"
           ViewerProtocolPolicy: redirect-to-https
         CacheBehaviors:
           - PathPattern: "/two/*"
@@ -142,14 +129,24 @@ Resources:
             ResponseCode: 200
             ResponsePagePath: /index.html
         Aliases:
-          - !Sub "sub.${RootDomainName}"
+          - !Ref RootDomainName
+          - !Sub "www.${RootDomainName}"
         ViewerCertificate:
           AcmCertificateArn: !Ref ACMCertificate
+          MinimumProtocolVersion: "TLSv1.2_2018"
           SslSupportMethod: sni-only
 
 
 #### Outputs   
 Outputs:
   WebsiteURL:
-    Value: !GetAtt WebBucket.WebsiteURL
+    Value: !GetAtt WebsiteBucket.WebsiteURL
     Description: URL for website hosted on S3
+
+  WebsiteBlogURL:
+    Value: !GetAtt BlogWebsiteBucket.WebsiteURL
+    Description: URL for Blog website hosted on S3
+
+  CFDistributionDomainName:
+    Description: 'Domain of the CloudFront distribution'
+    Value: !GetAtt CloudFrontDistribution.DomainName
