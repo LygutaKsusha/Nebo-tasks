@@ -27,8 +27,6 @@ jobs:
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
 
-    - uses: actions/checkout@v2
-
     # Runs a single command using the runners shell
     - name: AWS ECR Deploy
       uses: bitovi/github-actions-deploy-eks-helm@v1.2.8
