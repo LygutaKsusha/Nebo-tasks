@@ -17,5 +17,3 @@ jobs:
     steps:
         - name: echo a string
           run: Write-Output "Windows String"
-        - name: Error Step
-          run: doesnotexitsss
