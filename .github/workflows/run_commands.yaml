@@ -1,5 +1,8 @@
 name: Working Dirs & Shells
 on: [push]
+defaults:
+  run:
+    shell: bash
 
 jobs:
   display-ubuntu-info:
@@ -12,8 +15,15 @@ jobs:
           echo $GITHUB_SHA
           echo $GITHUB_REPOSITORY
           echo $GITHUB_WORKSPACE
+      - name: Change working dir
+        working-directory: ${{ github.workspace }}
+        run: |
+          pwd
   display-wd-info:
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: powershell
     steps:
       - name: Display Working Directory & List Files
         run: |
