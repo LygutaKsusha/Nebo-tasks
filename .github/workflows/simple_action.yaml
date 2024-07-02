@@ -1,0 +1,9 @@
+name: Working Dirs & Shells
+on: [push]
+
+jobs:
+  simple-action:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Using github actions
+        uses: actions/checkout@v3
