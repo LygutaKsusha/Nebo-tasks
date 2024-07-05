@@ -1,5 +1,8 @@
 name: Events workflow
-on: [push, pull_request, issues]
+on:
+  push:
+  pull_request:
+    types: [opened, assigned, reopened]
 
 jobs:
   action-test:

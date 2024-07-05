@@ -1,0 +1,14 @@
+name: Run based on other workflow
+on:
+  workflow_run:
+    workflows: [Events workflow]
+    types: [completed]
+
+jobs:
+  echo-string:
+    runs-on: ubuntu-latest
+    steps:
+      - name: some echo
+        run: |
+          echo "I was triggered because Events workflow was completed"
+
