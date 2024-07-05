@@ -2,7 +2,7 @@ name: Events workflow
 on:
   push:
   pull_request:
-    types: [opened, assigned, reopened]
+    types: [opened, assigned, reopened, closed]
 
 jobs:
   action-test:
