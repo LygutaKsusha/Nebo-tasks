@@ -1,0 +1,13 @@
+name: Events workflow
+on: [push, pull_request, issues]
+
+jobs:
+  action-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: some echo
+        run: |
+          echo $GITHUB_SHA
+          echo $GITHUB_REF
+      - name: Checkout test
+        uses: actions/checkout@v4
