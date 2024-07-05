@@ -1,4 +1,4 @@
-name: Working Dirs & Shells
+name: Branches strategy
 on:
     push:
         branches:
