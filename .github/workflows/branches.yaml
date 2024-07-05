@@ -1,0 +1,17 @@
+name: Working Dirs & Shells
+on:
+    push:
+        branches:
+          - main
+          - test-branch
+          - "feature/*"
+    pull_request:
+        branches:
+          - main
+
+jobs:
+  simple-action:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Using github actions
+        uses: actions/checkout@v3
