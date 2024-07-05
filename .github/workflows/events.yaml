@@ -9,5 +9,6 @@ jobs:
         run: |
           echo $GITHUB_SHA
           echo $GITHUB_REF
+          echo "Test commit"
       - name: Checkout test
         uses: actions/checkout@v4
